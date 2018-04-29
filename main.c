@@ -1,3 +1,16 @@
+////////////////////////////////
+//
+// CENG336 - Embedded Systems
+// Take Home Exam 3
+//
+// Group 66
+// 2098713 - Fatih Akca
+// 2177269 - Narmin Aliyeva
+//
+// 30/04/2018
+//
+////////////////////////////////
+
 #include "Includes.h"
 #include "LCD.h"
 
@@ -44,13 +57,14 @@ void display_remaining_time();
 void main(void) {
 
   init_system();
-  
+
   WriteCommandToLCD(0x81); // Goto to the 2nd char of the first line
   WriteStringToLCD("$>Very  Safe<$");
   WriteCommandToLCD(0xC1);
   WriteStringToLCD("$$$$$$$$$$$$$$");
 
-  while (toggle_flag == 0) { // wait for re1 to be pushed & released
+  // wait for re1 to be pushed & released
+  while (toggle_flag == 0) {
     RE1_task();
   }
 
@@ -72,7 +86,9 @@ void main(void) {
   for (int digitno = 0; digitno < 4; digitno++) {
     counter = 0;
     hash_flag = 1;
-    while (!adc_finish) { // while(1)
+
+    // wait until a/d conversion is finished
+    while (!adc_finish) {
       if (blink_flag == 1) {
         blink_digit(digitno);
         blink_flag = 0;
@@ -116,6 +132,7 @@ void main(void) {
   INTCONbits.RBIF = 0;
   INTCONbits.RBIE = 1;
 
+  // wait for rb7 button push
   while (!rb7_push) {
     if (rb_int_received) {
       delay_10msec(); // debouncing
@@ -155,7 +172,7 @@ void main(void) {
   T1CONbits.RD16 = 1;    // 16-bit mode
   T1CONbits.T1CKPS0 = 1; // 1:8 prescaler
   T1CONbits.T1CKPS1 = 1;
-  IPR1bits.TMR1IP = 1;   // high priority
+  IPR1bits.TMR1IP = 1; // high priority
   PIR1bits.TMR1IF = 0;
   PIE1bits.TMR1IE = 1;
   T1CONbits.TMR1ON = 1;
@@ -165,7 +182,7 @@ void main(void) {
     if (!enter_pin()) {
       if (counter_test_period <= 0)
         break;
-      
+
       WriteCommandToLCD(0x8B);
       WriteStringToLCD("XXXX");
       WriteCommandToLCD(0xC0);
@@ -193,9 +210,65 @@ void main(void) {
       }
     }
   }
+
   PIE1bits.ADIE = 0;
   ADCON0bits.ADON = 0;
   INTCONbits.PEIE = 0;
+}
+
+void init_system() {
+  toggle_flag = 0;
+  RE1_state = 0;
+
+  InitLCD(); // Initialize LCD in 4bit mode
+
+  PORTE = 0;
+  TRISE1 = 1; // RE1 - input
+  TRISH4 = 1; // input for ADC
+
+  // disable all interrupts
+  INTCON = 0;
+  INTCON2 = 0;
+  RCONbits.IPEN = 1;  // enable interrupt priorities
+  INTCONbits.GIE = 1; // Enable Global, peripheral, Timer0
+
+  firstrun_flag = 1;
+  PORTH &= 0x0F;
+}
+
+void init_tmr0_interrupt() {
+  counter = 0;
+
+  T0CON = 0b01000111;
+  TMR0 = 0;
+
+  INTCON2bits.TMR0IP = 1; // Timer0 set as HIGH priority
+  INTCONbits.TMR0IF = 0;
+  INTCONbits.TMR0IE = 1;
+  T0CONbits.TMR0ON = 1; // Enable Timer0 by setting TMR0ON
+}
+
+void init_rb_interrupt() {
+  TRISB4 = 0; // rb4 is output
+  TRISB6 = 1;
+  TRISB7 = 1;           // rb6 & rb7 - inputs
+  INTCON2bits.RBIP = 1; // set rb as high-priority interrupt
+  INTCON2bits.RBPU = 0; // pull-ups are enabled for rb6 & rb7 since
+                        // they are configured as inputs
+  PORTB;                // read PORTB value to end mismatch
+  INTCONbits.RBIF = 0;
+}
+
+void init_ADC() {
+  ADCON1 = 0; // TODO: check other channels
+  ADCON0 = 0;
+  ADCON0 = ADCON0 | 0b00110000;
+  ADCON2 = 0b10010010;
+  ADCON0bits.ADON = 1;
+  PIR1bits.ADIF = 0;
+  IPR1bits.ADIP = 0;
+  PIE1bits.ADIE = 1;
+  INTCONbits.PEIE = 1;
 }
 
 unsigned char enter_pin() {
@@ -297,8 +370,7 @@ unsigned char enter_pin() {
       }
     }
 
-    
-
+    // disable rb interrupt
     INTCONbits.RBIE = 0;
 
     // check entered pin is correct
@@ -308,11 +380,11 @@ unsigned char enter_pin() {
         break;
     }
 
-    // pin is correct
+    // pin is correct, return to main
     if (digit == 4)
       return 1;
   }
-  
+
   // no attempts left, fail
   return 0;
 }
@@ -330,115 +402,14 @@ void show_new_pin(unsigned char pin[]) {
   WriteStringToLCD("---");
 }
 
-void RE1_task() {
-  switch (RE1_state) {
-  case 0: // previously not pressed
-    if (PORTE & 0x02) {
-      RE1_state = 1;
-    }
-    break;
-
-  case 1: // previously pressed
-    if (!(PORTE & 0x02)) {
-      RE1_state = 0;
-      toggle_flag = 1;
-    }
-    break;
-  }
-}
-
-void init_system() {
-  toggle_flag = 0;
-  RE1_state = 0;
-
-  InitLCD(); // Initialize LCD in 4bit mode
-
-  PORTE = 0;
-  TRISE1 = 1; // RE1 - input
-  TRISH4 = 1; // input for ADC
-
-  // disable all interrupts
-  INTCON = 0;
-  INTCON2 = 0;
-  RCONbits.IPEN = 1;  // enable interrupt priorities
-  INTCONbits.GIE = 1; // Enable Global, peripheral, Timer0
-
-  firstrun_flag = 1;
-  PORTH &= 0x0F;
-}
-
-void delay_1sec() // 1 second of delay
-{
-  int t1 = 1000;
-  int t2 = 1248;
-
-  while (t1 != 0) {
-    while (t2 != 0) {
-      t2--;
-    }
-    t1--;
-    t2 = 1248;
-  }
-}
-
-void delay_4p5msec() // 4.5 milliseconds of delay
-{
-  int t = 4999;
-
-  while (t != 0) {
-    t--;
-  }
-}
-
-void delay_10msec() // 10 millisecond of delay
-{
-  int t = 11110;
-
-  while (t != 0) {
-    t--;
-  }
-}
-
-void init_tmr0_interrupt() {
-  counter = 0;
-
-  T0CON = 0b01000111;
-  TMR0 = 0;
-
-  INTCON2bits.TMR0IP = 1; // Timer0 set as HIGH priority
-  INTCONbits.TMR0IF = 0;
-  INTCONbits.TMR0IE = 1;
-  T0CONbits.TMR0ON = 1;   // Enable Timer0 by setting TMR0ON
-}
-
-void init_rb_interrupt() {
-  TRISB4 = 0;           // rb4 is output
-  TRISB6 = 1;
-  TRISB7 = 1;           // rb6 & rb7 - inputs
-  INTCON2bits.RBIP = 1; // set rb as high-priority interrupt
-  INTCON2bits.RBPU = 0; // pull-ups are enabled for rb6 & rb7 since
-                        // they are configured as inputs
-  PORTB;                // read PORTB value to end mismatch
-  INTCONbits.RBIF = 0;
-}
-
-void init_ADC() {
-  ADCON1 = 0;           // TODO: check other channels
-  ADCON0 = 0;
-  ADCON0 = ADCON0 | 0b00110000;
-  ADCON2 = 0b10010010;
-  ADCON0bits.ADON = 1;
-  PIR1bits.ADIF = 0;
-  IPR1bits.ADIP = 0;
-  PIE1bits.ADIE = 1;
-  INTCONbits.PEIE = 1;
-}
-
 void interrupt high_priority high_isr() {
+
   if (INTCONbits.TMR0IE && INTCONbits.TMR0IF) {
-    counter++;           // increment counter variable
-    counter2++;          // increment counter variable
-    
+    // tmr0 interrupt handler
+
+    counter++;  // increment counter variable
+    counter2++; // increment counter variable
+
     if (counter == 38) { // 250 ms
       counter = 0;
       blink_flag = 1;
@@ -447,36 +418,39 @@ void interrupt high_priority high_isr() {
         _500ms_passed = 1;
       }
     }
-    
+
     if (counter2 == 15) { // 100 ms
       counter2 = 0;
       ADCON0bits.GO = 1;
     }
-    
+
     INTCONbits.TMR0IF = 0; // Clear TMROIF
-    
+
   } else if (INTCONbits.RBIE && INTCONbits.RBIF) {
+    // rb interrupt handler
 
     preval = PORTB & (0x01 << rbX);
 
-    // if (((PORTB & (0x01 << rbX)) == 0) == preval ) { // check if rb6/rb7 is
-    // 0, i.e. pressed
     rb_int_received = 1;
     INTCONbits.RBIF = 0;
-    
+
   } else if (PIE1bits.TMR1IE && PIR1bits.TMR1IF) {
-    
+    // tmr1 interrupt handler
+
     counter1sec++;
-    
+
     if (counter1sec == 19) { // 1 second delay
       counter1sec = 0;
       counter_test_period--;
     }
-    
+
     PIR1bits.TMR1IF = 0;
   }
 }
+
 void interrupt low_priority low_isr() {
+
+  // a/d converter interrupt handler
   if (PIE1bits.ADIE && PIR1bits.ADIF) {
     ADC_old_value = ADC_value;
     ADC_value = map_ADC_value((ADRESH << 8) + ADRESL);
@@ -522,30 +496,6 @@ void blink_digit(int digit_address) {
 
     after_blink = 0;
     hash_flag = 1;
-  }
-}
-
-int map_ADC_value(int value) {
-  if (value < 100) {
-    return 0;
-  } else if (value < 200) {
-    return 1;
-  } else if (value < 300) {
-    return 2;
-  } else if (value < 400) {
-    return 3;
-  } else if (value < 500) {
-    return 4;
-  } else if (value < 600) {
-    return 5;
-  } else if (value < 700) {
-    return 6;
-  } else if (value < 800) {
-    return 7;
-  } else if (value < 900) {
-    return 8;
-  } else {
-    return 9;
   }
 }
 
@@ -602,5 +552,78 @@ void display_remaining_time() {
 
     value = counter_test_period % divisor;
     divisor /= 10;
+  }
+}
+
+int map_ADC_value(int value) {
+  if (value < 100) {
+    return 0;
+  } else if (value < 200) {
+    return 1;
+  } else if (value < 300) {
+    return 2;
+  } else if (value < 400) {
+    return 3;
+  } else if (value < 500) {
+    return 4;
+  } else if (value < 600) {
+    return 5;
+  } else if (value < 700) {
+    return 6;
+  } else if (value < 800) {
+    return 7;
+  } else if (value < 900) {
+    return 8;
+  } else {
+    return 9;
+  }
+}
+
+void RE1_task() {
+  switch (RE1_state) {
+  case 0: // previously not pressed
+    if (PORTE & 0x02) {
+      RE1_state = 1;
+    }
+    break;
+
+  case 1: // previously pressed
+    if (!(PORTE & 0x02)) {
+      RE1_state = 0;
+      toggle_flag = 1;
+    }
+    break;
+  }
+}
+
+void delay_1sec() // 1 second of delay
+{
+  int t1 = 1000;
+  int t2 = 1248;
+
+  while (t1 != 0) {
+    while (t2 != 0) {
+      t2--;
+    }
+    t1--;
+    t2 = 1248;
+  }
+}
+
+void delay_4p5msec() // 4.5 milliseconds of delay
+{
+  int t = 4999;
+
+  while (t != 0) {
+    t--;
+  }
+}
+
+void delay_10msec() // 10 millisecond of delay
+{
+  int t = 11110;
+
+  while (t != 0) {
+    t--;
   }
 }
