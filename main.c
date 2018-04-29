@@ -9,6 +9,7 @@ unsigned char firstrun_flag;
 unsigned char counter;
 unsigned char counter2;
 unsigned char counter500ms;
+unsigned char counter1sec;
 unsigned char rb6_push;
 unsigned char rb7_push;
 unsigned char adc_finish;
@@ -17,22 +18,27 @@ unsigned int ADC_old_value;
 unsigned char _500ms_passed;
 unsigned char display_pin;
 unsigned char rbX;
+unsigned char preval;
+unsigned char rb_int_received;
+unsigned char pin[4];
+unsigned char counter_test_period;
 
 void init_system();
 void RE1_task();
 void sec_delay();
 void init_tmr0_interrupt();
 void init_rb_interrupt();
-void blink_digit(int);
-void set_digit();
 void init_ADC();
+void blink_digit(int);
 void interrupt high_priority high_isr();
 void interrupt low_priority low_isr();
 int map_ADC_value(int);
 void show_new_pin(unsigned char pin[]);
+void dash_7_segment();
+unsigned char enter_pin();
+void display_remaining_time();
 
 void main(void) {
-  unsigned char pin[4];
 
   init_system();
 
@@ -53,6 +59,7 @@ void main(void) {
   ClearLCDScreen();
   WriteCommandToLCD(0x81); // Goto to the 2nd char of the first line
   WriteStringToLCD("Set a pin:####");
+  dash_7_segment();
   init_tmr0_interrupt();
   init_rb_interrupt();
   init_ADC();
@@ -68,9 +75,13 @@ void main(void) {
       }
     }
 
+    WriteCommandToLCD(0x8B + digitno);
+    WriteDataToLCD((int)'0' + ADC_value);
+
     adc_finish = 0;
     INTCONbits.RBIF = 0;
     INTCONbits.RBIE = 1; // enable rb interrupt
+    rb6_push = 0;
 
     while (rb6_push == 0) {
       if (adc_finish) {
@@ -78,21 +89,47 @@ void main(void) {
         WriteDataToLCD((int)'0' + ADC_value);
         adc_finish = 0;
       }
+      
+      if(rb_int_received){
+        __delay_ms(10);
+        if(preval == (PORTB & (0x01 << rbX)) && preval == 0) {
+          if (rbX == 6)
+            rb6_push = 1;
+          else if (rbX == 7)
+            rb7_push = 1;
+        }
+        rb_int_received = 0;
+      }
     }
-
+  
     pin[digitno] = ADC_value;
-    rb6_push = 0;
     INTCONbits.RBIE = 0; // disable rb interrupt
+    //__delay_ms(100);
   }
 
+  preval = 0;
+  PIE1bits.ADIE = 0;
+  ADCON0bits.ADON = 0;
+  INTCONbits.PEIE = 0;
   rb7_push = 0;
   rbX = 7;
   INTCONbits.RBIF = 0;
   INTCONbits.RBIE = 1;
   
-  while (!rb7_push)
-    ;
-
+  while (!rb7_push) {
+    if(rb_int_received){
+      //__delay_ms(10);
+      if(preval == (PORTB & (0x01 << rbX)) && preval == 0) {
+        if (rbX == 6)
+          rb6_push = 1;
+        else if (rbX == 7)
+          rb7_push = 1;
+      }
+      rb_int_received = 0;
+    }
+  }
+  
+  INTCONbits.RBIE = 0;
   display_pin = 1;
 
   counter = 0;
@@ -111,11 +148,172 @@ void main(void) {
     if (counter500ms == 12)
       break;
   }
+  
+  ADCON0bits.ADON = 1;
+  PIR1bits.ADIF = 0;
+  PIE1bits.ADIE = 1;
+  INTCONbits.PEIE = 1;
+  
+  counter_test_period = 120;
+  T1CON = 0;
+  TMR1 = 0;
+  T1CONbits.RD16 = 1;     // 16-bit mode
+  T1CONbits.T1CKPS0 = 1;  // 1:8 prescaler
+  T1CONbits.T1CKPS1 = 1;
+  IPR1bits.TMR1IP = 1;    // high priority
+  PIR1bits.TMR1IF = 0;
+  PIE1bits.TMR1IE = 1;
+  T1CONbits.TMR1ON = 1;
+  
+  while(counter_test_period > 0){
+    
+    if(!enter_pin()) {
+      WriteCommandToLCD(0x8B); // Goto to the 2nd char of the first line
+      WriteStringToLCD("XXXX");
+      WriteCommandToLCD(0xC0);
+      WriteStringToLCD("Try after 20sec.");
+      unsigned char suspend_start = counter_test_period;
 
-  while (1)
-    ;
+      while(1) {
+        display_remaining_time();
 
-  set_digit();
+        if(suspend_start > 20){
+          if (suspend_start - counter_test_period >= 20)
+            break;
+        }
+        else if(counter_test_period <= 0)
+          break;
+      }
+    }
+    else {
+      WriteCommandToLCD(0x80); // Goto to the 2nd char of the first line
+      WriteStringToLCD("Safe is opening!");
+      WriteCommandToLCD(0xC0);
+      WriteStringToLCD("$$$$$$$$$$$$$$$$");
+
+      while(1);
+    }
+  }
+  PIE1bits.ADIE = 0;
+  ADCON0bits.ADON = 0;
+  INTCONbits.PEIE = 0;  
+}
+
+
+unsigned char enter_pin()
+{
+  unsigned char entered_pin[4];
+
+  ClearLCDScreen();
+  WriteCommandToLCD(0xC2);
+  WriteStringToLCD("Attempts:");
+
+  for (unsigned char attempts = 2; attempts > 0; attempts--) {
+
+    ADCON0bits.ADON = 1;
+    PIR1bits.ADIF = 0;
+    PIE1bits.ADIE = 1;
+    INTCONbits.PEIE = 1;
+
+    WriteCommandToLCD(0x81);
+    WriteStringToLCD("Enter pin:####");
+    WriteCommandToLCD(0xCB);
+    WriteDataToLCD('0' + attempts);
+
+    rbX = 6;
+    for (int digitno = 0; digitno < 4; digitno++) {
+      counter = 0;
+      hash_flag = 1;
+      adc_finish = 0;
+
+      while (!adc_finish) { // while(1)
+        display_remaining_time();
+
+        if(counter_test_period <= 0)
+          return 0;
+        if (blink_flag == 1) {
+          blink_digit(digitno);
+          blink_flag = 0;
+        }
+      }
+
+      WriteCommandToLCD(0x8B + digitno);
+      WriteDataToLCD((int)'0' + ADC_value);
+
+      adc_finish = 0;
+      INTCONbits.RBIF = 0;
+      INTCONbits.RBIE = 1; // enable rb interrupt
+      rb6_push = 0;
+
+      while (rb6_push == 0) {
+        display_remaining_time();
+
+        if(counter_test_period <= 0)
+          return 0;
+        if (adc_finish) {
+          WriteCommandToLCD(0x8B + digitno);
+          WriteDataToLCD((int)'0' + ADC_value);
+          adc_finish = 0;
+        }
+
+        if(rb_int_received){
+          //__delay_ms(10);
+          if(preval == (PORTB & (0x01 << rbX)) && preval == 0) {
+            if (rbX == 6)
+              rb6_push = 1;
+            else if (rbX == 7)
+              rb7_push = 1;
+          }
+          rb_int_received = 0;
+        }
+      }
+
+      entered_pin[digitno] = ADC_value;
+      INTCONbits.RBIE = 0; // disable rb interrupt
+      //__delay_ms(100);
+    }
+
+    preval = 0;
+    PIE1bits.ADIE = 0;
+    ADCON0bits.ADON = 0;
+    INTCONbits.PEIE = 0;
+    rb7_push = 0;
+    rbX = 7;
+    INTCONbits.RBIF = 0;
+    INTCONbits.RBIE = 1;
+
+    while (!rb7_push) {
+      display_remaining_time();
+
+      if(counter_test_period <= 0)
+        return 0;
+      if(rb_int_received){
+        __delay_ms(10);
+        if(preval == (PORTB & (0x01 << rbX)) && preval == 0) {
+          if (rbX == 6)
+            rb6_push = 1;
+          else if (rbX == 7)
+            rb7_push = 1;
+        }
+        rb_int_received = 0;
+      }
+    }
+
+    // check pin
+    
+    INTCONbits.RBIE = 0;
+    
+    int digit;
+    for (digit = 0; digit < 4; digit++) {
+      if (pin[digit] != entered_pin[digit])
+        break;
+    }
+    
+    if (digit == 4)
+      return 1;
+  }
+  // no attempts left
+  return 0;
 }
 
 void show_new_pin(unsigned char pin[]) {
@@ -126,7 +324,7 @@ void show_new_pin(unsigned char pin[]) {
   WriteStringToLCD("---");
 
   for (int digitno = 0; digitno < 4; digitno++) {
-    WriteDataToLCD((int)'0' + pin[digitno]);
+    WriteDataToLCD('0' + pin[digitno]);
   }
   WriteStringToLCD("---");
 }
@@ -165,6 +363,7 @@ void init_system() {
   INTCONbits.GIE = 1; // Enable Global, peripheral, Timer0
 
   firstrun_flag = 1;
+  PORTH &= 0x0F;
 }
 
 void sec_delay() // 1 second delay
@@ -212,10 +411,20 @@ void init_rb_interrupt() {
   INTCONbits.RBIF = 0;
 }
 
+void init_ADC() {
+  ADCON1 = 0; // TODO: check other channels
+  ADCON0 = 0;
+  ADCON0 = ADCON0 | 0b00110000;
+  ADCON2 = 0b10010010;
+  ADCON0bits.ADON = 1;
+  PIR1bits.ADIF = 0;
+  IPR1bits.ADIP = 0;
+  PIE1bits.ADIE = 1;
+  INTCONbits.PEIE = 1;
+}
+
 void interrupt high_priority high_isr() {
   if (INTCONbits.TMR0IE && INTCONbits.TMR0IF) {
-    INTCONbits.TMR0IF = 0; // Clear TMROIF
-
     counter++;           // increment counter variable
     counter2++;          // increment counter variable
     if (counter == 38) { // 250 ms
@@ -230,14 +439,23 @@ void interrupt high_priority high_isr() {
       counter2 = 0;
       ADCON0bits.GO = 1;
     }
-  } else if (INTCONbits.RBIE && INTCONbits.RBIF) {
-    if ((PORTB & (0x01 << rbX)) == 0) { // check if rb6/rb7 is 0, i.e. pressed
-      if (rbX == 6)
-        rb6_push = 1;
-      else if (rbX == 7)
-        rb7_push = 1;
-    }
+    INTCONbits.TMR0IF = 0; // Clear TMROIF
+  }
+  else if (INTCONbits.RBIE && INTCONbits.RBIF) {
+    
+    preval = PORTB & (0x01 << rbX);
+       
+    //if (((PORTB & (0x01 << rbX)) == 0) == preval ) { // check if rb6/rb7 is 0, i.e. pressed
+    rb_int_received = 1;
     INTCONbits.RBIF = 0;
+  }
+  else if (PIE1bits.TMR1IE && PIR1bits.TMR1IF) {
+    counter1sec++;
+    if (counter1sec == 19) {
+      counter1sec = 0;
+      counter_test_period--;
+    }
+    PIR1bits.TMR1IF = 0;
   }
 }
 void interrupt low_priority low_isr() {
@@ -257,44 +475,17 @@ void interrupt low_priority low_isr() {
   }
 }
 
-void blink_digit(int digit) {
-  int digit_address = 0;
-  switch (digit) {
-  case 0:
-    digit_address = 0x8B;
-    break;
-  case 1:
-    digit_address = 0x8C;
-    break;
-  case 2:
-    digit_address = 0x8D;
-    break;
-  case 3:
-    digit_address = 0x8E;
-  }
+void blink_digit(int digit_address) {
+
   if (hash_flag == 1) {
-    WriteCommandToLCD(digit_address);
+    WriteCommandToLCD(digit_address + 0x8B);
     WriteDataToLCD(' ');
     hash_flag = 0;
   } else if (hash_flag == 0) {
-    WriteCommandToLCD(digit_address);
+    WriteCommandToLCD(digit_address + 0x8B);
     WriteDataToLCD('#');
     hash_flag = 1;
   }
-}
-
-void set_digit() {}
-
-void init_ADC() {
-  ADCON1 = 0; // TODO: check other channels
-  ADCON0 = 0;
-  ADCON0 = ADCON0 | 0b00110000;
-  ADCON2 = 0b10010010;
-  ADCON0bits.ADON = 1;
-  PIR1bits.ADIF = 0;
-  IPR1bits.ADIP = 0;
-  PIE1bits.ADIE = 1;
-  INTCONbits.PEIE = 1;
 }
 
 int map_ADC_value(int value) {
@@ -319,4 +510,84 @@ int map_ADC_value(int value) {
   } else {
     return 9;
   }
+}
+
+void dash_7_segment()
+{
+  PORTJ = 0x40;
+
+  PORTH = 0xff;
+//  if (digit == 0)  
+//    PORTH &= 0b11110111;
+//  else
+//    PORTH &= ~(0x01 << (digit - 1));
+//
+//  PORTH |= 0x01 << digit;
+//  __delay_ms(5);
+}
+
+void display_remaining_time()
+{
+
+  PORTJ = 0x00;
+  PORTH = 0xff;
+  int divisor = 100;
+  unsigned char value = counter_test_period;
+  
+  unsigned char tmp;
+  for (int digit = 0; digit < 4; digit++) {
+    if (digit == 0){
+      PORTH |= 0x01;
+      PORTJ = 0b00111111;
+      __delay_ms(1);
+      PORTH &= 0b11110000;
+
+      continue;
+    }
+    
+
+    value = value / divisor;
+    
+    switch(value) {
+    case 0:
+      tmp = 0b00111111;
+      break;
+    case 1:
+      tmp = 0b00000110;
+      break;
+    case 2:
+      tmp = 0b01011011;
+      break;
+    case 3:
+      tmp = 0b01001111;
+      break;
+    case 4:
+      tmp = 0b01100110;
+      break;
+    case 5:
+      tmp = 0b01101101;
+      break;
+    case 6:
+      tmp = 0b01111101;
+      break;
+    case 7:
+      tmp = 0b00000111;
+      break;
+    case 8:
+      tmp = 0b01111111;
+      break;
+    case 9:
+      tmp = 0b01101111;
+      break;
+    }
+    
+    PORTH |= 0x01 << digit;
+    PORTJ = tmp;
+    __delay_ms(1);
+    PORTH &= 0b11110000;
+
+    value = counter_test_period % divisor;
+    divisor /= 10;
+  }
+  
 }
