@@ -71,7 +71,6 @@ void main(void) {
     adc_finish = 0;
     INTCONbits.RBIF = 0;
     INTCONbits.RBIE = 1; // enable rb interrupt
-    rb6_push = 0;
 
     while (rb6_push == 0) {
       if (adc_finish) {
@@ -83,13 +82,9 @@ void main(void) {
 
     pin[digitno] = ADC_value;
     rb6_push = 0;
-    rb7_push = 0;
-      INTCONbits.RBIF = 0;
     INTCONbits.RBIE = 0; // disable rb interrupt
-    __delay_ms(100);
   }
 
-  rb6_push = 0;
   rb7_push = 0;
   rbX = 7;
   INTCONbits.RBIF = 0;
@@ -207,14 +202,13 @@ void init_tmr0_interrupt() {
 }
 
 void init_rb_interrupt() {
-  PORTB = 0;
-  TRISB4 = 0;
-  TRISB5 = 0;
+  TRISB4 = 0;           // rb4 & rb5 - outputs (initLCD())
   TRISB6 = 1;
-  TRISB7 = 1;
+  TRISB7 = 1;           // rb6 & rb7 - inputs
   INTCON2bits.RBIP = 1; // set rb as high-priority interrupt
-  INTCON2bits.RBPU = 0; // pull-ups are enabled
-
+  INTCON2bits.RBPU = 0; // pull-ups are enabled for rb6 & rb7 since
+                        // they are configured as inputs
+  PORTB;                // read PORTB value to end mismatch
   INTCONbits.RBIF = 0;
 }
 
@@ -237,7 +231,7 @@ void interrupt high_priority high_isr() {
       ADCON0bits.GO = 1;
     }
   } else if (INTCONbits.RBIE && INTCONbits.RBIF) {
-    if ((PORTB & (0x01 << rbX)) != 0) {
+    if ((PORTB & (0x01 << rbX)) == 0) { // check if rb6/rb7 is 0, i.e. pressed
       if (rbX == 6)
         rb6_push = 1;
       else if (rbX == 7)
