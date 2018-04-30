@@ -23,7 +23,7 @@
 // interrupts. Timer0 is configured to operate in 8-bit mode with a //
 // prescale value of 1:256. Timer1 is configured to operate in      //
 // 16-bit mode with a prescale value of 1:8. PORTB pull-ups are     //
-// enabled.                                                         //
+// enabled for RB6 and RB7.                                         //
 //                                                                  //
 // ADC interrupt is handled inside the low_isr() function, since it //
 // is configured as a low-priority interrupt. The isr checks if the //
@@ -104,8 +104,8 @@ void main(void) {
 
   rbX = 6;
   for (int digitno = 0; digitno < 4; digitno++) {
-    counter = 0;
-    hash_flag = 1;
+    counter = 0; // clear timer0 counter for 250ms
+    hash_flag = 1; // initially '#' is displayed
 
     // wait until a/d conversion is finished
     while (!adc_finish) {
@@ -115,6 +115,7 @@ void main(void) {
       }
     }
 
+    // display the entered value on the corresponding LCD cell
     WriteCommandToLCD(0x8B + digitno);
     WriteDataToLCD((int)'0' + ADC_value);
 
@@ -123,6 +124,7 @@ void main(void) {
     INTCONbits.RBIE = 1; // enable rb interrupt
     rb6_push = 0;
 
+    // user adjusts the digit value then pushes rb6 button to set it
     while (rb6_push == 0) {
       if (adc_finish) {
         WriteCommandToLCD(0x8B + digitno);
@@ -171,6 +173,7 @@ void main(void) {
 
   counter = 0;
   counter500ms = 0;
+  // blink the message with 500 ms intervals for 3sec
   while (1) {
     if (_500ms_passed) {
       if (display_pin) {
@@ -192,7 +195,7 @@ void main(void) {
   T1CONbits.RD16 = 1;    // 16-bit mode
   T1CONbits.T1CKPS0 = 1; // 1:8 prescaler
   T1CONbits.T1CKPS1 = 1;
-  IPR1bits.TMR1IP = 1; // high priority
+  IPR1bits.TMR1IP = 1;   // high priority
   PIR1bits.TMR1IF = 0;
   PIE1bits.TMR1IE = 1;
   T1CONbits.TMR1ON = 1;
@@ -204,11 +207,12 @@ void main(void) {
         break;
 
       WriteCommandToLCD(0x8B);
-      WriteStringToLCD("XXXX");
+      WriteStringToLCD("XXXX"); // replace '#'s with 'X's
       WriteCommandToLCD(0xC0);
       WriteStringToLCD("Try after 20sec.");
       char suspend_start = counter_test_period;
 
+      // counter keeps decrementing during this period
       while (1) {
         display_remaining_time();
 
@@ -218,13 +222,14 @@ void main(void) {
         } else if (counter_test_period <= 0)
           break;
       }
-    } else {
+    } else { // if the pin is correctly entered
       WriteCommandToLCD(0x80);
       WriteStringToLCD("Safe is opening!");
       WriteCommandToLCD(0xC0);
       WriteStringToLCD("$$$$$$$$$$$$$$$$");
 
       while (1) {
+	// timer1 interrupt disabled; counter stops decreasing
         PIE1bits.TMR1IE = 0;
         display_remaining_time();
       }
@@ -249,6 +254,7 @@ void init_system() {
   // disable all interrupts
   INTCON = 0;
   INTCON2 = 0;
+
   RCONbits.IPEN = 1;  // enable interrupt priorities
   INTCONbits.GIE = 1; // Enable Global, peripheral, Timer0
 
@@ -259,7 +265,7 @@ void init_system() {
 void init_tmr0_interrupt() {
   counter = 0;
 
-  T0CON = 0b01000111;
+  T0CON = 0b01000111; // 8-bit mode, 1:256 prescale
   TMR0 = 0;
 
   INTCON2bits.TMR0IP = 1; // Timer0 set as HIGH priority
@@ -405,7 +411,7 @@ unsigned char enter_pin() {
       return 1;
   }
 
-  // no attempts left, fail
+  // inform main of two consecutive unsuccessful attempts
   return 0;
 }
 
@@ -449,6 +455,7 @@ void interrupt high_priority high_isr() {
   } else if (INTCONbits.RBIE && INTCONbits.RBIF) {
     // rb interrupt handler
 
+    // store the observed rbX(rb6/rb7) state
     preval = PORTB & (0x01 << rbX);
 
     rb_int_received = 1;
@@ -487,7 +494,7 @@ void interrupt low_priority low_isr() {
 
 void blink_digit(int digit_address) {
 
-  if (hash_flag == 1) {
+  if (hash_flag == 1) { // previously displaying '#'
     WriteCommandToLCD(digit_address + 0x8B);
 
     if (display_active)
@@ -500,7 +507,7 @@ void blink_digit(int digit_address) {
 
     hash_flag = 0;
 
-  } else if (hash_flag == 0) {
+  } else if (hash_flag == 0) { // previously displaying ' '
 
     WriteCommandToLCD(digit_address + 0x8B);
 
