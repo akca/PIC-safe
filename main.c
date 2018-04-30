@@ -1,20 +1,41 @@
-////////////////////////////////
-//
-// CENG336 - Embedded Systems
-// Take Home Exam 3
-//
-// Group 66
-// 2098713 - Fatih Akca
-// 2177269 - Narmin Aliyeva
-//
-// 30/04/2018
-//
-////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+// CENG336 - Embedded Systems                                       //
+// Take Home Exam 3                                                 //
+//                                                                  //
+// Group 66                                                         //
+// 2098713 - Fatih Akca                                             //
+// 2177269 - Narmin Aliyeva                                         //
+//                                                                  //
+// 30/04/2018                                                       //
+//                                                                  //
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+// This program is written for PIC18F8722 working at 40 MHz.        //
+//                                                                  //
+// The pin-setting period can be entered after the press and        //
+// release of the RE1 button. This event is observed using the      //
+// RE1_task() function which monitors the previous state of the     //
+// button, i.e. pressed or not pressed.                             //
+//                                                                  //
+// Timer0, Timer1, and PORTB interrupts are handled inside the      //
+// high_isr() function, since these are configured as high-priority //
+// interrupts. Timer0 is configured to operate in 8-bit mode with a //
+// prescale value of 1:256. Timer1 is configured to operate in      //
+// 16-bit mode with a prescale value of 1:8. PORTB pull-ups are     //
+// enabled.                                                         //
+//                                                                  //
+// ADC interrupt is handled inside the low_isr() function, since it //
+// is configured as a low-priority interrupt. The isr checks if the //
+// user is changing the digit value, if so, it triggers the display //
+// action for the newly entered value on the LCD.                   //
+//                                                                  //
+//////////////////////////////////////////////////////////////////////
 
 #include "Includes.h"
 #include "LCD.h"
 
-unsigned char toggle_flag;
+unsigned char RE1_event;
 unsigned char RE1_state;
 unsigned char hash_flag;
 unsigned char blink_flag;
@@ -34,7 +55,6 @@ unsigned char rbX;
 unsigned char preval;
 unsigned char rb_int_received;
 unsigned char pin[4];
-unsigned char after_blink;
 unsigned char display_active;
 char counter_test_period;
 
@@ -64,7 +84,7 @@ void main(void) {
   WriteStringToLCD("$$$$$$$$$$$$$$");
 
   // wait for re1 to be pushed & released
-  while (toggle_flag == 0) {
+  while (RE1_event == 0) {
     RE1_task();
   }
 
@@ -74,7 +94,7 @@ void main(void) {
   delay_1sec();
 
   ClearLCDScreen();
-  WriteCommandToLCD(0x81); // Goto to the 2nd char of the first line
+  WriteCommandToLCD(0x81);
   WriteStringToLCD("Set a pin:####");
   PORTJ = 0x40;
   PORTH = 0xff;
@@ -217,7 +237,7 @@ void main(void) {
 }
 
 void init_system() {
-  toggle_flag = 0;
+  RE1_event = 0;
   RE1_state = 0;
 
   InitLCD(); // Initialize LCD in 4bit mode
@@ -260,10 +280,10 @@ void init_rb_interrupt() {
 }
 
 void init_ADC() {
-  ADCON1 = 0; // TODO: check other channels
+  ADCON1 = 0;
   ADCON0 = 0;
-  ADCON0 = ADCON0 | 0b00110000;
-  ADCON2 = 0b10010010;
+  ADCON0 = ADCON0 | 0b00110000; // select AN12 for potentiometer
+  ADCON2 = 0b10010010; // right justified, 4 Tad, Fosc/32
   ADCON0bits.ADON = 1;
   PIR1bits.ADIF = 0;
   IPR1bits.ADIP = 0;
@@ -408,20 +428,20 @@ void interrupt high_priority high_isr() {
     // tmr0 interrupt handler
 
     counter++;  // increment counter variable
-    counter2++; // increment counter variable
+    counter2++;
 
     if (counter == 38) { // 250 ms
       counter = 0;
       blink_flag = 1;
       counter500ms++;
-      if (counter500ms % 2 == 0) {
+      if (counter500ms % 2 == 0) { // 500 ms
         _500ms_passed = 1;
       }
     }
 
     if (counter2 == 15) { // 100 ms
       counter2 = 0;
-      ADCON0bits.GO = 1;
+      ADCON0bits.GO = 1; // start a/d conversion
     }
 
     INTCONbits.TMR0IF = 0; // Clear TMROIF
@@ -455,6 +475,7 @@ void interrupt low_priority low_isr() {
     ADC_old_value = ADC_value;
     ADC_value = map_ADC_value((ADRESH << 8) + ADRESL);
 
+    // detect if the user is entering a new value
     if (ADC_old_value != ADC_value && !firstrun_flag) {
       adc_finish = 1;
     }
@@ -468,7 +489,6 @@ void blink_digit(int digit_address) {
 
   if (hash_flag == 1) {
     WriteCommandToLCD(digit_address + 0x8B);
-    after_blink = 1;
 
     if (display_active)
       display_remaining_time();
@@ -478,13 +498,11 @@ void blink_digit(int digit_address) {
     if (display_active)
       display_remaining_time();
 
-    after_blink = 0;
     hash_flag = 0;
 
   } else if (hash_flag == 0) {
 
     WriteCommandToLCD(digit_address + 0x8B);
-    after_blink = 1;
 
     if (display_active)
       display_remaining_time();
@@ -494,7 +512,6 @@ void blink_digit(int digit_address) {
     if (display_active)
       display_remaining_time();
 
-    after_blink = 0;
     hash_flag = 1;
   }
 }
@@ -590,7 +607,7 @@ void RE1_task() {
   case 1: // previously pressed
     if (!(PORTE & 0x02)) {
       RE1_state = 0;
-      toggle_flag = 1;
+      RE1_event = 1;
     }
     break;
   }
@@ -619,7 +636,7 @@ void delay_4p5msec() // 4.5 milliseconds of delay
   }
 }
 
-void delay_10msec() // 10 millisecond of delay
+void delay_10msec() // 10 milliseconds of delay
 {
   int t = 11110;
 
